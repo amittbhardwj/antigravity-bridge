@@ -25,14 +25,19 @@ let defaultModelId = '';
 
 let optimisticMessage = null;
 let activeCascadeConfigs = {};
+let statusCheckCounter = 0;
 
 function updateInputStates(steps) {
   let isAgentRunning = false;
   if (steps.length > 0) {
     const lastStep = steps[steps.length - 1];
     const status = lastStep.status || '';
+    // WAITING status means agent is paused for permission — don't lock the input
     if (status === 'CORTEX_STEP_STATUS_RUNNING' || status === 'running') {
       isAgentRunning = true;
+    }
+    if (status === 'CORTEX_STEP_STATUS_WAITING' || status === 'waiting') {
+      isAgentRunning = false;
     }
   }
 
@@ -148,12 +153,55 @@ async function loadModels() {
   }
 }
 
+function updateQuotaDisplay() {
+  const selectEl = document.getElementById('model-select');
+  const badgeEl = document.getElementById('quota-badge');
+  const dotEl = document.getElementById('quota-dot');
+  const textEl = document.getElementById('quota-text');
+  
+  if (!selectEl || !badgeEl || !dotEl || !textEl) return;
+  
+  const selectedModelId = selectEl.value;
+  const modelInfo = availableModels[selectedModelId];
+  
+  if (modelInfo && modelInfo.quotaInfo) {
+    const fraction = modelInfo.quotaInfo.remainingFraction !== undefined ? modelInfo.quotaInfo.remainingFraction : 1.0;
+    const percentLeft = Math.round(fraction * 100);
+    
+    textEl.textContent = `${percentLeft}% left`;
+    
+    dotEl.className = 'quota-dot';
+    if (fraction <= 0.2) {
+      dotEl.classList.add('danger');
+    } else if (fraction <= 0.5) {
+      dotEl.classList.add('warning');
+    }
+    
+    if (modelInfo.quotaInfo.resetTime) {
+      try {
+        const resetDate = new Date(modelInfo.quotaInfo.resetTime);
+        const timeStr = resetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        badgeEl.title = `Resets at ${timeStr}`;
+      } catch (e) {
+        badgeEl.title = `Resets: ${modelInfo.quotaInfo.resetTime}`;
+      }
+    } else {
+      badgeEl.title = '';
+    }
+    
+    badgeEl.style.display = 'inline-flex';
+  } else {
+    badgeEl.style.display = 'none';
+  }
+}
+
 function onModelChanged() {
   const selectEl = document.getElementById('model-select');
   if (selectEl && activeCascadeId) {
     selectedModels[activeCascadeId] = selectEl.value;
     console.log(`[Model] Manually switched active conversation ${activeCascadeId} to ${selectEl.value}`);
   }
+  updateQuotaDisplay();
 }
 
 function toggleSidebar(open) {
@@ -363,9 +411,30 @@ async function checkConnectionStatus() {
           banner.style.display = 'flex';
         }
       }
+    } else {
+      const statusDot = document.querySelector('.badge-status .status-dot');
+      const statusText = document.querySelector('.badge-status span:last-child');
+      if (statusText) {
+        if (statusDot) statusDot.classList.remove('active');
+        statusText.textContent = 'Disconnected';
+      }
+      const banner = document.getElementById('connection-banner');
+      if (banner) {
+        banner.style.display = 'flex';
+      }
     }
   } catch (err) {
     console.warn('Failed to fetch status:', err);
+    const statusDot = document.querySelector('.badge-status .status-dot');
+    const statusText = document.querySelector('.badge-status span:last-child');
+    if (statusText) {
+      if (statusDot) statusDot.classList.remove('active');
+      statusText.textContent = 'Disconnected';
+    }
+    const banner = document.getElementById('connection-banner');
+    if (banner) {
+      banner.style.display = 'flex';
+    }
   } finally {
     isCheckingStatus = false;
   }
@@ -436,6 +505,7 @@ function selectConversation(id, summary) {
     } else if (defaultModelId) {
       selectEl.value = defaultModelId;
     }
+    updateQuotaDisplay();
   }
 
   // Enable text inputs
@@ -458,11 +528,12 @@ function selectConversation(id, summary) {
 async function fetchActiveTrajectory() {
   if (!activeCascadeId) return;
   try {
-    // Periodically refresh the connection status to detect dynamic port resets or sleep/wake events
+    // Periodically refresh the connection status and models list (updates remaining quota)
     statusCheckCounter++;
     if (statusCheckCounter >= 6) {
       statusCheckCounter = 0;
       checkConnectionStatus();
+      loadModels();
     }
 
     const response = await fetch('/exa.language_server_pb.LanguageServerService/GetCascadeTrajectory', {
@@ -518,15 +589,20 @@ async function fetchActiveTrajectory() {
       }
     }
 
-    renderTrajectorySteps(steps);
+    renderTrajectorySteps(steps, data);
   } catch (err) {
     console.error("Polling error:", err);
+    // Reset thinking state on polling failure to unlock UI
+    isThinking = false;
+    updateInputStates([]);
+    checkConnectionStatus();
   }
 }
 
 // Step rendering parsing logic
-function renderTrajectorySteps(steps) {
-  const currentJson = JSON.stringify(steps);
+function renderTrajectorySteps(steps, data) {
+  const truncationKey = data?.truncated ? `truncated-${data.totalStepsCount}` : 'full';
+  const currentJson = JSON.stringify(steps) + '-' + truncationKey;
   if (currentJson === lastStepsJson) return; // Skip DOM updates if identical
   
   lastStepsJson = currentJson;
@@ -537,9 +613,19 @@ function renderTrajectorySteps(steps) {
 
   const fragment = document.createDocumentFragment();
 
+  // Prepend truncation banner if applicable
+  if (data && data.truncated) {
+    const banner = document.createElement('div');
+    banner.className = 'truncation-banner';
+    banner.innerHTML = '<span class="material-symbols-outlined" style="font-size: 1.1rem; vertical-align: middle;">info</span>' +
+      '<span>Showing last 60 of ' + (data.totalStepsCount || steps.length) + ' steps (older history truncated for mobile performance)</span>';
+    fragment.appendChild(banner);
+  }
+
   steps.forEach((step, index) => {
     const type = step.type;
     const status = step.status || '';
+    const isWaiting = (status === 'CORTEX_STEP_STATUS_WAITING' || status === 'waiting');
 
     // 1. User Inputs
     if (type === 'CORTEX_STEP_TYPE_USER_INPUT' && step.userInput) {
@@ -570,8 +656,13 @@ function renderTrajectorySteps(steps) {
             const args = JSON.parse(tc.argumentsJson);
             summary = args.toolSummary || args.toolAction || '';
           } catch(e) {}
-          appendToolAccordion(fragment, tc.name, summary, 'CORTEX_STEP_STATUS_RUNNING', tc.argumentsJson, 'settings');
+          appendToolAccordion(fragment, tc.name, summary, isWaiting ? 'CORTEX_STEP_STATUS_WAITING' : 'CORTEX_STEP_STATUS_RUNNING', tc.argumentsJson, 'settings');
         });
+      }
+
+      // Render approval card if this step is WAITING for user interaction
+      if (isWaiting) {
+        appendApprovalCard(fragment, index, step);
       }
     }
 
@@ -582,6 +673,7 @@ function renderTrajectorySteps(steps) {
       const output = cmd.output || cmd.errorMessage || '';
       const detail = 'Command:\n' + cmdLine + '\n\nCwd:\n' + (cmd.cwd || '') + '\n\nExit Code:\n' + (cmd.exitCode !== undefined ? cmd.exitCode : 'Pending') + '\n\nOutput:\n' + output;
       appendToolAccordion(fragment, 'run_command', cmdLine, status, detail, 'terminal');
+      if (isWaiting) appendApprovalCard(fragment, index, step);
     }
 
     else if (type === 'CORTEX_STEP_TYPE_LIST_DIRECTORY' && step.listDirectory) {
@@ -589,6 +681,7 @@ function renderTrajectorySteps(steps) {
       const path = ld.directoryPathUri || '';
       const detail = 'Directory:\n' + path + '\n\n' + (step.error ? 'Error:\n' + JSON.stringify(step.error, null, 2) : 'Listing completed.');
       appendToolAccordion(fragment, 'list_dir', path, status, detail, 'folder');
+      if (isWaiting) appendApprovalCard(fragment, index, step);
     }
 
     else if (type === 'CORTEX_STEP_TYPE_VIEW_FILE' && step.viewFile) {
@@ -596,6 +689,7 @@ function renderTrajectorySteps(steps) {
       const path = vf.absolutePathUri || '';
       const detail = 'File:\n' + path + '\n\nContent:\n' + (vf.content || '');
       appendToolAccordion(fragment, 'view_file', path, status, detail, 'visibility');
+      if (isWaiting) appendApprovalCard(fragment, index, step);
     }
 
     else if (type === 'CORTEX_STEP_TYPE_GREP_SEARCH' && step.grepSearch) {
@@ -611,6 +705,7 @@ function renderTrajectorySteps(steps) {
         detail += gs.rawOutput || 'No matches found.';
       }
       appendToolAccordion(fragment, 'grep_search', query, status, detail, 'search');
+      if (isWaiting) appendApprovalCard(fragment, index, step);
     }
 
     else if (type === 'CORTEX_STEP_TYPE_CODE_ACTION' && step.codeAction) {
@@ -643,12 +738,14 @@ function renderTrajectorySteps(steps) {
         detail += '\nResult:\n' + JSON.stringify(ca.actionResult, null, 2);
       }
       appendToolAccordion(fragment, toolName, subtitle, status, detail, 'edit');
+      if (isWaiting) appendApprovalCard(fragment, index, step);
     }
 
     else if (type === 'CORTEX_STEP_TYPE_SEARCH_WEB' && step.searchWeb) {
       const sw = step.searchWeb;
       const detail = 'Query:\n' + sw.query + '\n\nSummary:\n' + (sw.summary || '');
       appendToolAccordion(fragment, 'search_web', sw.query, status, detail, 'language');
+      if (isWaiting) appendApprovalCard(fragment, index, step);
     }
 
     else if (type === 'CORTEX_STEP_TYPE_ASK_QUESTION' && step.askQuestion) {
@@ -665,6 +762,7 @@ function renderTrajectorySteps(steps) {
         });
       }
       appendToolAccordion(fragment, 'ask_question', 'Question for User', status, detail, 'help_outline');
+      if (isWaiting) appendApprovalCard(fragment, index, step);
     }
 
     else if (type === 'CORTEX_STEP_TYPE_ERROR_MESSAGE' && step.errorMessage) {
@@ -673,6 +771,11 @@ function renderTrajectorySteps(steps) {
 
     else if (type === 'CORTEX_STEP_TYPE_SYSTEM_MESSAGE' && step.systemMessage) {
       appendMessageRow(fragment, 'system', 'System', step.systemMessage.message || '');
+    }
+
+    // Catch-all: if ANY step type is WAITING and we didn't already render an approval card
+    else if (isWaiting) {
+      appendApprovalCard(fragment, index, step);
     }
   });
 
@@ -895,4 +998,309 @@ async function sendPrompt() {
     isThinking = false;
     fetchActiveTrajectory();
   }
+}
+
+// ===== Permission Approval System =====
+
+// Track which steps we've already submitted approvals for (to prevent double-click)
+let pendingApprovals = new Set();
+let resolvedApprovals = {}; // stepIndex -> 'approved' | 'rejected'
+
+/**
+ * Determines the interaction configuration based on the step's type and content.
+ * Maps step fields to the correct protobuf interaction payload.
+ */
+function getInteractionConfig(step) {
+  const type = step.type || '';
+  
+  // Permission requests (file read/write, command execution, MCP)
+  if (step.plannerResponse && step.plannerResponse.toolCalls && step.plannerResponse.toolCalls.length > 0) {
+    const tc = step.plannerResponse.toolCalls[0];
+    const toolName = tc.name || '';
+    let description = '';
+    let icon = 'shield';
+    let title = 'Permission Request';
+    
+    try {
+      const args = JSON.parse(tc.argumentsJson || '{}');
+      
+      if (toolName === 'ask_permission') {
+        title = 'Permission Request';
+        icon = 'shield';
+        const action = args.Action || 'unknown';
+        const target = args.Target || '';
+        const reason = args.Reason || '';
+        description = 'Action: ' + action + '\nTarget: ' + target;
+        if (reason) description += '\nReason: ' + reason;
+        
+        return {
+          title: title,
+          icon: icon,
+          description: description,
+          interactionCase: 'permission',
+          approveValue: { allow: true, scope: 1 },
+          rejectValue: { allow: false }
+        };
+      }
+      
+      if (toolName === 'run_command') {
+        title = 'Run Command';
+        icon = 'terminal';
+        const cmd = args.CommandLine || '';
+        const cwd = args.Cwd || '';
+        description = cmd;
+        if (cwd) description += '\nWorkdir: ' + cwd;
+        
+        return {
+          title: title,
+          icon: icon,
+          description: description,
+          interactionCase: 'runCommand',
+          approveValue: { confirm: true, commandLines: [cmd] },
+          rejectValue: { confirm: false, commandLines: [cmd] }
+        };
+      }
+      
+      if (toolName.startsWith('call_mcp_tool') || toolName.startsWith('mcp_')) {
+        title = 'MCP Tool Call';
+        icon = 'extension';
+        description = 'Tool: ' + toolName;
+        if (args.ServerName) description += '\nServer: ' + args.ServerName;
+        if (args.ToolName) description += '\nAction: ' + args.ToolName;
+        
+        return {
+          title: title,
+          icon: icon,
+          description: description,
+          interactionCase: 'mcp',
+          approveValue: { allow: true, scope: 1 },
+          rejectValue: { allow: false }
+        };
+      }
+      
+      // Generic tool approval (write_to_file, replace_file_content, etc.)
+      title = 'Approve Action';
+      icon = 'verified';
+      const summary = args.toolSummary || args.toolAction || toolName;
+      description = summary;
+      if (args.TargetFile) description += '\nFile: ' + args.TargetFile;
+      if (args.Description) description += '\n' + args.Description;
+      
+      return {
+        title: title,
+        icon: icon,
+        description: description,
+        interactionCase: 'approvalInteraction',
+        approveValue: { confirm: true },
+        rejectValue: { confirm: false }
+      };
+      
+    } catch (e) {
+      console.warn('[Approval] Failed to parse tool call args:', e);
+    }
+  }
+  
+  // Run command step waiting for approval
+  if (type === 'CORTEX_STEP_TYPE_RUN_COMMAND' && step.runCommand) {
+    const cmdLine = step.runCommand.commandLine || '';
+    return {
+      title: 'Run Command',
+      icon: 'terminal',
+      description: cmdLine + (step.runCommand.cwd ? '\nWorkdir: ' + step.runCommand.cwd : ''),
+      interactionCase: 'runCommand',
+      approveValue: { confirm: true, commandLines: [cmdLine] },
+      rejectValue: { confirm: false, commandLines: [cmdLine] }
+    };
+  }
+  
+  // Ask question step waiting for user response
+  if (type === 'CORTEX_STEP_TYPE_ASK_QUESTION' && step.askQuestion) {
+    const aq = step.askQuestion;
+    let desc = '';
+    if (aq.questions && aq.questions.length > 0) {
+      desc = aq.questions[0].question || 'Agent has a question';
+    }
+    return {
+      title: 'Question for You',
+      icon: 'help_outline',
+      description: desc,
+      interactionCase: 'approvalInteraction',
+      approveValue: { confirm: true },
+      rejectValue: { confirm: false }
+    };
+  }
+  
+  // Code action waiting
+  if (type === 'CORTEX_STEP_TYPE_CODE_ACTION' && step.codeAction) {
+    const ca = step.codeAction;
+    const desc = ca.description || 'Code modification';
+    return {
+      title: 'Approve Code Change',
+      icon: 'edit',
+      description: desc,
+      interactionCase: 'approvalInteraction',
+      approveValue: { confirm: true },
+      rejectValue: { confirm: false }
+    };
+  }
+  
+  // Fallback for unknown waiting steps
+  return {
+    title: 'Action Pending Approval',
+    icon: 'shield',
+    description: 'The agent is waiting for your permission to proceed.',
+    interactionCase: 'approvalInteraction',
+    approveValue: { confirm: true },
+    rejectValue: { confirm: false }
+  };
+}
+
+/**
+ * Submits an approval or rejection interaction to the Antigravity backend.
+ */
+async function submitUserInteraction(stepIndex, approved, step) {
+  const approvalKey = activeCascadeId + '-' + stepIndex;
+  if (pendingApprovals.has(approvalKey)) return; // prevent double-click
+  pendingApprovals.add(approvalKey);
+  
+  const config = getInteractionConfig(step);
+  const interactionValue = approved ? config.approveValue : config.rejectValue;
+  
+  const payload = {
+    cascadeId: activeCascadeId,
+    interaction: {
+      trajectoryId: activeCascadeId,
+      stepIndex: stepIndex,
+      interaction: {
+        case: config.interactionCase,
+        value: interactionValue
+      }
+    }
+  };
+  
+  console.log('[Approval] Submitting:', JSON.stringify(payload));
+  
+  // Update UI immediately
+  resolvedApprovals[stepIndex] = approved ? 'approved' : 'rejected';
+  
+  // Update the card in-place without waiting for poll
+  const card = document.querySelector('[data-approval-step="' + stepIndex + '"]');
+  if (card) {
+    card.classList.add(approved ? 'approval-resolved' : 'approval-rejected');
+    const label = card.querySelector('.approval-label');
+    if (label) label.textContent = approved ? 'APPROVED' : 'REJECTED';
+    const btns = card.querySelector('.approval-buttons');
+    if (btns) {
+      btns.innerHTML = '<span style="font-size: 0.8rem; color: ' + (approved ? 'var(--color-green)' : 'var(--color-red)') + '; display: flex; align-items: center; gap: 0.4rem;">' +
+        '<span class="material-symbols-outlined" style="font-size: 1rem;">' + (approved ? 'check_circle' : 'cancel') + '</span>' +
+        '<span>' + (approved ? 'Permission granted' : 'Permission denied') + '</span></span>';
+    }
+  }
+  
+  try {
+    const response = await fetch('/exa.language_server_pb.LanguageServerService/HandleCascadeUserInteraction', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('[Approval] Backend error:', response.status, errText);
+      showErrorInChat('Approval failed (' + response.status + '): ' + errText);
+    } else {
+      console.log('[Approval] Successfully submitted', approved ? 'APPROVE' : 'REJECT', 'for step', stepIndex);
+    }
+    
+    // Force fast polling to pick up the agent's reaction
+    updatePollingInterval(400);
+    setTimeout(() => fetchActiveTrajectory(), 500);
+    
+  } catch (err) {
+    console.error('[Approval] Network error:', err);
+    showErrorInChat('Approval request failed: ' + err.message);
+  } finally {
+    pendingApprovals.delete(approvalKey);
+  }
+}
+
+/**
+ * Renders an interactive approval card inline in the chat feed.
+ */
+function appendApprovalCard(fragment, stepIndex, step) {
+  const config = getInteractionConfig(step);
+  const resolved = resolvedApprovals[stepIndex];
+  
+  const row = document.createElement('div');
+  row.className = 'message-row system-tool';
+  
+  // Avatar column
+  const avatarCol = document.createElement('div');
+  avatarCol.className = 'message-avatar-col';
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar tool';
+  avatar.style.borderColor = 'rgba(245, 158, 11, 0.3)';
+  avatar.style.background = 'rgba(245, 158, 11, 0.08)';
+  avatar.innerHTML = '<span class="material-symbols-outlined" style="font-size: 1rem; color: var(--color-amber);">' + config.icon + '</span>';
+  avatarCol.appendChild(avatar);
+  row.appendChild(avatarCol);
+  
+  // Content column
+  const contentCol = document.createElement('div');
+  contentCol.className = 'message-content-col';
+  
+  const card = document.createElement('div');
+  card.className = 'approval-card' + (resolved === 'approved' ? ' approval-resolved' : '') + (resolved === 'rejected' ? ' approval-rejected' : '');
+  card.setAttribute('data-approval-step', stepIndex);
+  
+  // Header with pulse
+  const header = document.createElement('div');
+  header.className = 'approval-header';
+  header.innerHTML = '<span class="approval-pulse"></span>' +
+    '<span class="approval-label">' + (resolved === 'approved' ? 'APPROVED' : resolved === 'rejected' ? 'REJECTED' : 'AWAITING APPROVAL') + '</span>';
+  card.appendChild(header);
+  
+  // Title
+  const title = document.createElement('div');
+  title.className = 'approval-title';
+  title.innerHTML = '<span class="material-symbols-outlined">' + config.icon + '</span>' +
+    '<span>' + config.title + '</span>';
+  card.appendChild(title);
+  
+  // Description
+  if (config.description) {
+    const desc = document.createElement('div');
+    desc.className = 'approval-desc';
+    desc.textContent = config.description;
+    card.appendChild(desc);
+  }
+  
+  // Buttons or resolved status
+  const btnsDiv = document.createElement('div');
+  btnsDiv.className = 'approval-buttons';
+  
+  if (resolved) {
+    const isApproved = resolved === 'approved';
+    btnsDiv.innerHTML = '<span style="font-size: 0.8rem; color: ' + (isApproved ? 'var(--color-green)' : 'var(--color-red)') + '; display: flex; align-items: center; gap: 0.4rem;">' +
+      '<span class="material-symbols-outlined" style="font-size: 1rem;">' + (isApproved ? 'check_circle' : 'cancel') + '</span>' +
+      '<span>' + (isApproved ? 'Permission granted' : 'Permission denied') + '</span></span>';
+  } else {
+    const approveBtn = document.createElement('button');
+    approveBtn.className = 'approval-btn approval-btn-approve';
+    approveBtn.innerHTML = '<span class="material-symbols-outlined">check_circle</span><span>Approve</span>';
+    approveBtn.onclick = function() { submitUserInteraction(stepIndex, true, step); };
+    
+    const rejectBtn = document.createElement('button');
+    rejectBtn.className = 'approval-btn approval-btn-reject';
+    rejectBtn.innerHTML = '<span class="material-symbols-outlined">cancel</span><span>Reject</span>';
+    rejectBtn.onclick = function() { submitUserInteraction(stepIndex, false, step); };
+    
+    btnsDiv.appendChild(approveBtn);
+    btnsDiv.appendChild(rejectBtn);
+  }
+  
+  card.appendChild(btnsDiv);
+  contentCol.appendChild(card);
+  row.appendChild(contentCol);
+  fragment.appendChild(row);
 }

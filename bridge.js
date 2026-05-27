@@ -376,7 +376,26 @@ app.post('/exa.language_server_pb.LanguageServerService/:method', async (req, re
       }
     }
 
-    Readable.fromWeb(response.body).pipe(res);
+    if (req.params.method === 'GetCascadeTrajectory') {
+      let responseText = '';
+      try {
+        responseText = await response.text();
+        const parsed = JSON.parse(responseText);
+        if (parsed?.trajectory?.steps && parsed.trajectory.steps.length > 60) {
+          const totalSteps = parsed.trajectory.steps.length;
+          parsed.trajectory.steps = parsed.trajectory.steps.slice(-60);
+          parsed.truncated = true;
+          parsed.totalStepsCount = totalSteps;
+          console.log(`[Proxy] Truncated GetCascadeTrajectory steps from ${totalSteps} to 60 for performance`);
+        }
+        res.send(JSON.stringify(parsed));
+      } catch (e) {
+        console.warn('[Proxy Warning] Failed to process GetCascadeTrajectory response:', e.message);
+        res.send(responseText);
+      }
+    } else {
+      Readable.fromWeb(response.body).pipe(res);
+    }
   } catch (err) {
     console.error(`[Proxy Error] ${req.params.method}:`, err);
     res.status(500).json({ 
@@ -995,6 +1014,40 @@ app.get('/', (req, res) => {
       color: var(--text-muted);
     }
 
+    .quota-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 0.35rem 0.65rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      transition: all 0.2s ease;
+      cursor: help;
+    }
+    
+    .quota-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background-color: var(--color-green);
+      box-shadow: 0 0 6px var(--color-green);
+      display: inline-block;
+    }
+
+    .quota-dot.warning {
+      background-color: var(--color-amber);
+      box-shadow: 0 0 6px var(--color-amber);
+    }
+
+    .quota-dot.danger {
+      background-color: var(--color-red);
+      box-shadow: 0 0 6px var(--color-red);
+    }
+
     .model-select {
       background-color: var(--bg-card);
       border: 1px solid var(--border-color);
@@ -1024,6 +1077,18 @@ app.get('/', (req, res) => {
       box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
     }
 
+    .truncation-banner {
+      background-color: rgba(99, 102, 241, 0.05);
+      border-bottom: 1px solid var(--border-color);
+      color: var(--color-indigo-light);
+      padding: 0.75rem 2rem;
+      font-size: 0.8rem;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      justify-content: center;
+    }
 
     /* Chat History Canvas */
     .chat-container {
@@ -1568,6 +1633,221 @@ app.get('/', (req, res) => {
       transform: translateY(-2px);
       box-shadow: 0 6px 20px rgba(79, 70, 229, 0.35);
     }
+
+    /* ===== Approval Card Styles ===== */
+    .approval-card {
+      background: linear-gradient(135deg, rgba(79, 70, 229, 0.08) 0%, rgba(168, 85, 247, 0.04) 100%);
+      border: 1px solid rgba(79, 70, 229, 0.25);
+      border-radius: 12px;
+      padding: 1rem 1.15rem;
+      margin-top: 0.5rem;
+      position: relative;
+      overflow: hidden;
+      animation: approvalSlideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .approval-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--color-indigo), #a855f7, var(--color-indigo));
+      background-size: 200% 100%;
+      animation: approvalShimmer 2.5s ease-in-out infinite;
+    }
+
+    @keyframes approvalSlideIn {
+      from { opacity: 0; transform: translateY(8px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @keyframes approvalShimmer {
+      0%, 100% { background-position: 200% 0; }
+      50% { background-position: -200% 0; }
+    }
+
+    .approval-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.6rem;
+    }
+
+    .approval-pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--color-amber);
+      box-shadow: 0 0 8px var(--color-amber);
+      animation: approvalPulse 1.5s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes approvalPulse {
+      0%, 100% { opacity: 0.5; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.15); }
+    }
+
+    .approval-label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: var(--color-amber);
+    }
+
+    .approval-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #e2e8f0;
+      margin-bottom: 0.35rem;
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+
+    .approval-title .material-symbols-outlined {
+      font-size: 1.1rem;
+      color: var(--color-indigo-light);
+    }
+
+    .approval-desc {
+      font-size: 0.8rem;
+      color: #94a3b8;
+      font-family: var(--font-mono);
+      line-height: 1.5;
+      margin-bottom: 0.85rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+      background: rgba(0, 0, 0, 0.2);
+      padding: 0.5rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.03);
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .approval-buttons {
+      display: flex;
+      gap: 0.6rem;
+    }
+
+    .approval-btn {
+      flex: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      padding: 0.6rem 1rem;
+      border-radius: 8px;
+      border: none;
+      font-family: var(--font-ui);
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+
+    .approval-btn .material-symbols-outlined {
+      font-size: 1.05rem;
+    }
+
+    .approval-btn-approve {
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(16, 185, 129, 0.1) 100%);
+      color: var(--color-green);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .approval-btn-approve:hover {
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.35) 0%, rgba(16, 185, 129, 0.2) 100%);
+      border-color: rgba(16, 185, 129, 0.5);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.15);
+    }
+
+    .approval-btn-approve:active {
+      transform: translateY(0);
+    }
+
+    .approval-btn-reject {
+      background: linear-gradient(135deg, rgba(239, 68, 68, 0.12) 0%, rgba(239, 68, 68, 0.06) 100%);
+      color: var(--color-red);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+
+    .approval-btn-reject:hover {
+      background: linear-gradient(135deg, rgba(239, 68, 68, 0.25) 0%, rgba(239, 68, 68, 0.12) 100%);
+      border-color: rgba(239, 68, 68, 0.4);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.12);
+    }
+
+    .approval-btn-reject:active {
+      transform: translateY(0);
+    }
+
+    .approval-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+      box-shadow: none !important;
+    }
+
+    .approval-resolved {
+      border-color: rgba(16, 185, 129, 0.2);
+      background: rgba(16, 185, 129, 0.03);
+    }
+
+    .approval-resolved::before {
+      display: none;
+    }
+
+    .approval-resolved .approval-pulse {
+      background: var(--color-green);
+      box-shadow: 0 0 6px var(--color-green);
+      animation: none;
+    }
+
+    .approval-resolved .approval-label {
+      color: var(--color-green);
+    }
+
+    .approval-rejected {
+      border-color: rgba(239, 68, 68, 0.2);
+      background: rgba(239, 68, 68, 0.03);
+    }
+
+    .approval-rejected::before {
+      display: none;
+    }
+
+    .approval-rejected .approval-pulse {
+      background: var(--color-red);
+      box-shadow: 0 0 6px var(--color-red);
+      animation: none;
+    }
+
+    .approval-rejected .approval-label {
+      color: var(--color-red);
+    }
+
+    @media (max-width: 768px) {
+      .approval-card {
+        padding: 0.85rem 1rem;
+      }
+      .approval-desc {
+        font-size: 0.75rem;
+        max-height: 150px;
+      }
+      .approval-btn {
+        padding: 0.55rem 0.75rem;
+        font-size: 0.8rem;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1630,6 +1910,10 @@ app.get('/', (req, res) => {
       </div>
       
       <div class="topbar-right">
+        <div id="quota-badge" class="quota-badge" style="display: none;">
+          <span id="quota-dot" class="quota-dot"></span>
+          <span id="quota-text"></span>
+        </div>
         <select id="model-select" class="model-select" onchange="onModelChanged()">
           <option value="">Loading Models...</option>
         </select>
