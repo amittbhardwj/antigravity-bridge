@@ -1060,9 +1060,10 @@ function appendMessageRow(fragment, type, sender, content, thinking, images) {
       imagesContainer.className = 'message-images-container';
       images.forEach(img => {
         let src = '';
-        if (img.base64Data) {
-          const mime = img.mimeType || 'image/png';
-          src = img.base64Data.startsWith('data:') ? img.base64Data : `data:${mime};base64,${img.base64Data}`;
+        const base64Str = img.base64Data || img.base64_data;
+        const mime = img.mimeType || img.mime_type || 'image/png';
+        if (base64Str) {
+          src = base64Str.startsWith('data:') ? base64Str : `data:${mime};base64,${base64Str}`;
         } else if (img.uri) {
           src = img.uri;
         }
@@ -1188,7 +1189,9 @@ async function sendPrompt() {
       payload.images = [
         {
           base64Data: imageToSend.base64Data,
-          mimeType: imageToSend.mimeType
+          base64_data: imageToSend.base64Data,
+          mimeType: imageToSend.mimeType,
+          mime_type: imageToSend.mimeType
         }
       ];
     }
