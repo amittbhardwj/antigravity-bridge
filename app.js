@@ -717,7 +717,13 @@ function appendMessageRow(fragment, type, sender, content, thinking) {
   if (type === 'user') {
     avatar.textContent = 'U';
   } else if (type === 'agent') {
-    avatar.textContent = '🎁';
+    avatar.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width: 16px; height: 16px;">
+        <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M2 17L12 22L22 17" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M2 12L12 17L22 12" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    `;
   } else if (type === 'system') {
     avatar.innerHTML = '<span class="material-symbols-outlined" style="font-size: 1rem;">settings</span>';
   } else {
