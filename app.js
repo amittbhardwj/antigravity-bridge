@@ -25,7 +25,8 @@ let defaultModelId = '';
 
 let optimisticMessage = null;
 let activeCascadeConfigs = {};
-let statusCheckCounter = 0;
+let lastConnectionCheckTime = 0;
+let lastModelLoadTime = 0;
 
 function updateInputStates(steps) {
   let isAgentRunning = false;
@@ -106,6 +107,7 @@ function updatePollingInterval(newIntervalMs) {
 async function loadModels() {
   const selectEl = document.getElementById('model-select');
   if (!selectEl) return;
+  const prevValue = selectEl.value;
   try {
     const response = await fetch('/exa.language_server_pb.LanguageServerService/GetAvailableModels', {
       method: 'POST',
@@ -138,15 +140,25 @@ async function loadModels() {
       }
     });
 
-    // Set default model on select element initially
-    if (availableModels[defaultModelId]) {
-      selectEl.value = defaultModelId;
+    // Restore selection: prioritize active conversation's manual selection,
+    // then the previous UI select value, then the default model.
+    let modelToSet = '';
+    if (activeCascadeId && selectedModels[activeCascadeId] && availableModels[selectedModels[activeCascadeId]]) {
+      modelToSet = selectedModels[activeCascadeId];
+    } else if (prevValue && availableModels[prevValue]) {
+      modelToSet = prevValue;
+    } else if (availableModels[defaultModelId]) {
+      modelToSet = defaultModelId;
     } else {
       const keys = Object.keys(availableModels);
       if (keys.length > 0) {
-        selectEl.value = keys[0];
+        modelToSet = keys[0];
       }
     }
+    if (modelToSet) {
+      selectEl.value = modelToSet;
+    }
+    updateQuotaDisplay();
   } catch (err) {
     console.error("Failed to load models:", err);
     selectEl.innerHTML = '<option value="">Error loading models</option>';
@@ -479,6 +491,8 @@ async function wakeAntigravity() {
 
 // Load trajectories once ready
 window.addEventListener('DOMContentLoaded', async () => {
+  lastConnectionCheckTime = Date.now();
+  lastModelLoadTime = Date.now();
   await checkConnectionStatus();
   await loadModels();
   await loadConversations();
@@ -529,10 +543,13 @@ async function fetchActiveTrajectory() {
   if (!activeCascadeId) return;
   try {
     // Periodically refresh the connection status and models list (updates remaining quota)
-    statusCheckCounter++;
-    if (statusCheckCounter >= 6) {
-      statusCheckCounter = 0;
+    const now = Date.now();
+    if (now - lastConnectionCheckTime >= 15000) {
+      lastConnectionCheckTime = now;
       checkConnectionStatus();
+    }
+    if (now - lastModelLoadTime >= 60000) {
+      lastModelLoadTime = now;
       loadModels();
     }
 
