@@ -292,6 +292,7 @@ app.post('/exa.language_server_pb.LanguageServerService/:method', async (req, re
     if (req.params.method === 'SendUserCascadeMessage') {
       const parsedBody = await readBody(req);
       if (parsedBody && parsedBody.cascadeId) {
+        console.log(`[Proxy] SendUserCascadeMessage: body size = ${JSON.stringify(parsedBody).length} bytes, has images = ${!!(parsedBody.images && parsedBody.images.length)}, images count = ${parsedBody.images ? parsedBody.images.length : 0}`);
         const chosenModelName = parsedBody.selectedModel;
         delete parsedBody.selectedModel; // remove custom field before sending to Go backend
         

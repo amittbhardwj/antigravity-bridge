@@ -242,23 +242,72 @@ function processImageFile(file) {
     return;
   }
   
-  if (file.size > 5 * 1024 * 1024) {
-    alert('Image size exceeds the 5MB limit.');
-    return;
+  const attachBtn = document.getElementById('attach-btn');
+  let originalHtml = '';
+  if (attachBtn) {
+    originalHtml = attachBtn.innerHTML;
+    attachBtn.disabled = true;
+    attachBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size: 1.15rem; animation: spin 1s linear infinite; display: inline-block;">sync</span>';
   }
   
   const reader = new FileReader();
   reader.onload = function(e) {
-    const dataUrl = e.target.result;
-    const base64Marker = ';base64,';
-    const markerIndex = dataUrl.indexOf(base64Marker);
-    if (markerIndex !== -1) {
-      const base64Data = dataUrl.substring(markerIndex + base64Marker.length);
-      attachedImage = {
-        base64Data: base64Data,
-        mimeType: file.type
-      };
-      showImagePreview(dataUrl);
+    const img = new Image();
+    img.onload = function() {
+      // Bounding box size: max 1200px on the longest side
+      const MAX_DIM = 1200;
+      let width = img.width;
+      let height = img.height;
+      
+      if (width > MAX_DIM || height > MAX_DIM) {
+        if (width > height) {
+          height = Math.round((height * MAX_DIM) / width);
+          width = MAX_DIM;
+        } else {
+          width = Math.round((width * MAX_DIM) / height);
+          height = MAX_DIM;
+        }
+      }
+      
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      
+      // Compress to high-quality JPEG (85% quality)
+      const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      const base64Marker = ';base64,';
+      const markerIndex = compressedDataUrl.indexOf(base64Marker);
+      if (markerIndex !== -1) {
+        const base64Data = compressedDataUrl.substring(markerIndex + base64Marker.length);
+        attachedImage = {
+          base64Data: base64Data,
+          mimeType: 'image/jpeg'
+        };
+        showImagePreview(compressedDataUrl);
+      }
+      
+      if (attachBtn) {
+        attachBtn.disabled = false;
+        attachBtn.innerHTML = originalHtml;
+      }
+    };
+    img.onerror = function() {
+      alert('Failed to load image for processing.');
+      if (attachBtn) {
+        attachBtn.disabled = false;
+        attachBtn.innerHTML = originalHtml;
+      }
+    };
+    img.src = e.target.result;
+  };
+  reader.onerror = function() {
+    alert('Failed to read file.');
+    if (attachBtn) {
+      attachBtn.disabled = false;
+      attachBtn.innerHTML = originalHtml;
     }
   };
   reader.readAsDataURL(file);
