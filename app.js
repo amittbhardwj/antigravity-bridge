@@ -1188,9 +1188,7 @@ async function sendPrompt() {
     if (imageToSend) {
       payload.images = [
         {
-          base64Data: imageToSend.base64Data,
           base64_data: imageToSend.base64Data,
-          mimeType: imageToSend.mimeType,
           mime_type: imageToSend.mimeType
         }
       ];
