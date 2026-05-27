@@ -1,5 +1,5 @@
 import express from 'express';
-import { execSync } from 'child_process';
+import { execSync, exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -176,6 +176,30 @@ app.get('/api/default-project-dir', (req, res) => {
   }).catch(err => {
     res.json({ defaultDir: path.join(os.homedir(), '.gemini/antigravity/scratch') });
   });
+});
+
+// Wakeup API — launches the Antigravity Desktop App in the background
+app.post('/api/wakeup', (req, res) => {
+  console.log('[Wakeup] Received wakeup request from client...');
+  // 1. Try to open the Antigravity app
+  try {
+    exec('open -g -a Antigravity', (err) => {
+      if (err) {
+        console.warn('[Wakeup Warning] Failed to run open -g -a Antigravity:', err.message);
+      }
+    });
+  } catch (e) {
+    console.warn('[Wakeup Warning] Exception trying to launch Antigravity:', e.message);
+  }
+
+  // 2. Wait 2.5 seconds, then re-check status and return it
+  setTimeout(() => {
+    const creds = getAntigravityCredentials();
+    res.json({
+      success: creds.running,
+      antigravity: creds
+    });
+  }, 2500);
 });
 
 // Catch-All Connect RPC JSON Proxy
@@ -778,6 +802,48 @@ app.get('/', (req, res) => {
       0% { opacity: 0.6; }
       50% { opacity: 1; }
       100% { opacity: 0.6; }
+    }
+
+    .connection-banner {
+      background-color: rgba(239, 68, 68, 0.08);
+      border-bottom: 1px solid rgba(239, 68, 68, 0.15);
+      color: #fca5a5;
+      padding: 0.6rem 1.25rem;
+      font-size: 0.8rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      font-weight: 500;
+      animation: fadeIn 0.2s ease;
+      box-sizing: border-box;
+      width: 100%;
+    }
+    .connection-banner-btn {
+      background: var(--color-red);
+      color: #fff;
+      border: none;
+      padding: 0.3rem 0.75rem;
+      border-radius: 6px;
+      font-family: var(--font-ui);
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: all 0.15s ease;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    .connection-banner-btn:hover {
+      background: #dc2626;
+      transform: scale(1.02);
+    }
+    .connection-banner-btn:disabled {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-muted);
+      cursor: not-allowed;
     }
 
     .sidebar-scroll {
@@ -1572,6 +1638,17 @@ app.get('/', (req, res) => {
         </button>
         <div class="mac-badge">Mac: ${tailscaleIp}</div>
       </div>
+    </div>
+
+    <div id="connection-banner" class="connection-banner" style="display: none;">
+      <span style="display: inline-flex; align-items: center; gap: 0.45rem;">
+        <span class="material-symbols-outlined" style="font-size: 1.15rem; color: var(--color-red); vertical-align: middle;">warning</span>
+        <span>Disconnected from Antigravity local server.</span>
+      </span>
+      <button class="connection-banner-btn" onclick="wakeAntigravity()">
+        <span class="material-symbols-outlined" style="font-size: 0.95rem;">power_settings_new</span>
+        <span>Wake App</span>
+      </button>
     </div>
 
     <!-- Scrollable Chat Panel -->

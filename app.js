@@ -331,8 +331,86 @@ async function loadConversations() {
   }
 }
 
+let isCheckingStatus = false;
+async function checkConnectionStatus() {
+  if (isCheckingStatus) return;
+  isCheckingStatus = true;
+  try {
+    const res = await fetch('/status');
+    if (res.ok) {
+      const data = await res.json();
+      const running = data?.antigravity?.running;
+      
+      // Update sidebar status badge
+      const statusDot = document.querySelector('.badge-status .status-dot');
+      const statusText = document.querySelector('.badge-status span:last-child');
+      if (statusText) {
+        if (running) {
+          if (statusDot) statusDot.classList.add('active');
+          statusText.textContent = 'Connected to Mac';
+        } else {
+          if (statusDot) statusDot.classList.remove('active');
+          statusText.textContent = 'Disconnected';
+        }
+      }
+
+      // Update main connection banner
+      const banner = document.getElementById('connection-banner');
+      if (banner) {
+        if (running) {
+          banner.style.display = 'none';
+        } else {
+          banner.style.display = 'flex';
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to fetch status:', err);
+  } finally {
+    isCheckingStatus = false;
+  }
+}
+
+let isWaking = false;
+async function wakeAntigravity() {
+  if (isWaking) return;
+  isWaking = true;
+
+  const btn = document.querySelector('.connection-banner-btn');
+  const originalHtml = btn ? btn.innerHTML : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner" style="width:12px; height:12px; border-width:2px; margin:0; display:inline-block; vertical-align:middle;"></span> <span>Waking...</span>';
+  }
+
+  try {
+    const res = await fetch('/api/wakeup', { method: 'POST' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success) {
+        console.log('[Wakeup] Antigravity successfully woken up!');
+        await loadModels();
+        await checkConnectionStatus();
+        await loadConversations();
+      } else {
+        alert('Failed to wake Antigravity. Please make sure the app is installed and running on your Mac.');
+      }
+    }
+  } catch (err) {
+    console.error('Wakeup error:', err);
+    alert('Error sending wakeup request: ' + err.message);
+  } finally {
+    isWaking = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
+  }
+}
+
 // Load trajectories once ready
 window.addEventListener('DOMContentLoaded', async () => {
+  await checkConnectionStatus();
   await loadModels();
   await loadConversations();
 });
@@ -380,6 +458,13 @@ function selectConversation(id, summary) {
 async function fetchActiveTrajectory() {
   if (!activeCascadeId) return;
   try {
+    // Periodically refresh the connection status to detect dynamic port resets or sleep/wake events
+    statusCheckCounter++;
+    if (statusCheckCounter >= 6) {
+      statusCheckCounter = 0;
+      checkConnectionStatus();
+    }
+
     const response = await fetch('/exa.language_server_pb.LanguageServerService/GetCascadeTrajectory', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
