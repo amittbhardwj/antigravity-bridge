@@ -23,6 +23,69 @@ let availableModels = {};
 let selectedModels = {}; // per-conversation model choice
 let defaultModelId = '';
 
+let optimisticMessage = null;
+let activeCascadeConfigs = {};
+
+function updateInputStates(steps) {
+  let isAgentRunning = false;
+  if (steps.length > 0) {
+    const lastStep = steps[steps.length - 1];
+    const status = lastStep.status || '';
+    if (status === 'CORTEX_STEP_STATUS_RUNNING' || status === 'running') {
+      isAgentRunning = true;
+    }
+  }
+
+  const isDisabled = isThinking || isAgentRunning;
+  const inputEl = document.getElementById('prompt-input');
+  const btnEl = document.getElementById('send-btn');
+  if (inputEl) {
+    inputEl.disabled = isDisabled;
+    if (isDisabled) {
+      inputEl.placeholder = "Agent is thinking...";
+    } else {
+      inputEl.placeholder = "Send message to agent...";
+      if (window.innerWidth > 768) {
+        inputEl.focus();
+      }
+    }
+  }
+  if (btnEl) {
+    btnEl.disabled = isDisabled;
+  }
+}
+
+function showErrorInChat(message) {
+  const chatContainer = document.getElementById('chat-container');
+  if (!chatContainer) return;
+  const errRow = document.createElement('div');
+  errRow.className = 'message-row error';
+  
+  const avatarCol = document.createElement('div');
+  avatarCol.className = 'message-avatar-col';
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar system';
+  avatar.innerHTML = '<span class="material-symbols-outlined" style="font-size: 1rem;">error</span>';
+  avatarCol.appendChild(avatar);
+  errRow.appendChild(avatarCol);
+
+  const contentCol = document.createElement('div');
+  contentCol.className = 'message-content-col';
+  const senderName = document.createElement('div');
+  senderName.className = 'message-sender-name';
+  senderName.textContent = 'Error';
+  contentCol.appendChild(senderName);
+
+  const bubble = document.createElement('div');
+  bubble.className = 'message-bubble';
+  bubble.textContent = message;
+  contentCol.appendChild(bubble);
+  errRow.appendChild(contentCol);
+
+  chatContainer.appendChild(errRow);
+  chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
 let currentPollIntervalMs = 1500;
 
 function updatePollingInterval(newIntervalMs) {
@@ -343,14 +406,22 @@ async function fetchActiveTrajectory() {
       updatePollingInterval(2500); // 2.5s slow-poll
     }
 
-    // Extract currently active model from trajectory config
+    // Extract currently active model and config from trajectory config
     const metadatas = data?.trajectory?.executorMetadatas || [];
     let activeModelName = '';
+    let activeConfig = null;
     for (let i = metadatas.length - 1; i >= 0; i--) {
-      if (metadatas[i]?.cascadeConfig?.plannerConfig?.modelName) {
-        activeModelName = metadatas[i].cascadeConfig.plannerConfig.modelName;
+      if (metadatas[i]?.cascadeConfig) {
+        activeConfig = metadatas[i].cascadeConfig;
+        if (metadatas[i].cascadeConfig.plannerConfig?.modelName) {
+          activeModelName = metadatas[i].cascadeConfig.plannerConfig.modelName;
+        }
         break;
       }
+    }
+    
+    if (activeConfig) {
+      activeCascadeConfigs[activeCascadeId] = activeConfig;
     }
     
     // Update model dropdown only if the user hasn't explicitly selected another model
@@ -520,14 +591,33 @@ function renderTrajectorySteps(steps) {
     }
   });
 
+  // Check if server has registered our optimistic message
+  if (optimisticMessage) {
+    const hasOptimistic = steps.some(step => 
+      step.type === 'CORTEX_STEP_TYPE_USER_INPUT' && 
+      step.userInput?.items?.some(item => item.text === optimisticMessage)
+    );
+    if (hasOptimistic) {
+      optimisticMessage = null; // Server has it, clear optimistic state
+    }
+  }
+
+  // If the server hasn't returned the optimistic message yet, append it at the end
+  if (optimisticMessage) {
+    appendMessageRow(fragment, 'user', 'You', optimisticMessage);
+  }
+
   // Render items
   chatContainer.innerHTML = '';
   chatContainer.appendChild(fragment);
 
   // Auto scroll
-  if (isAtBottom || steps.length <= 2) {
+  if (isAtBottom || steps.length <= 2 || optimisticMessage) {
     chatContainer.scrollTop = chatContainer.scrollHeight;
   }
+
+  // Update input disabled states based on steps
+  updateInputStates(steps);
 }
 
 // Helper to append standard message rows
@@ -653,12 +743,20 @@ async function sendPrompt() {
 
   input.value = '';
   isThinking = true;
-  document.getElementById('send-btn').disabled = true;
-  document.getElementById('prompt-input').disabled = true;
+  optimisticMessage = prompt;
+
+  // Immediately lock UI inputs
+  updateInputStates([]);
 
   const chatContainer = document.getElementById('chat-container');
   const placeholder = document.getElementById('chat-placeholder');
   if (placeholder) placeholder.remove();
+
+  // Optimistically append the user prompt immediately
+  const fragment = document.createDocumentFragment();
+  appendMessageRow(fragment, 'user', 'You', prompt);
+  chatContainer.appendChild(fragment);
+  chatContainer.scrollTop = chatContainer.scrollHeight;
 
   try {
     const payload = {
@@ -675,54 +773,35 @@ async function sendPrompt() {
       payload.selectedModel = selectEl.value;
     }
 
+    // Attach cached cascadeConfig to bypass server-side trajectory fetch latency
+    if (activeCascadeConfigs[activeCascadeId]) {
+      payload.cascadeConfig = JSON.parse(JSON.stringify(activeCascadeConfigs[activeCascadeId]));
+    }
+
     // Force fast polling immediately when a message is sent
     updatePollingInterval(400);
 
-    const response = await fetch('/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage', {
+    // Call fetch in the background without blocking the UI thread
+    fetch('/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
+    }).then(async (response) => {
+      if (!response.ok) {
+        const text = await response.text();
+        showErrorInChat('API Error (' + response.status + '): ' + text);
+      }
+    }).catch((err) => {
+      showErrorInChat('[Command failed] ' + err.message);
+    }).finally(() => {
+      isThinking = false;
+      // Triggers polling to re-evaluate and possibly enable inputs
+      fetchActiveTrajectory();
     });
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error('API Error (' + response.status + '): ' + text);
-    }
-
-    // Force poll to render user prompt immediately
-    await fetchActiveTrajectory();
-
   } catch (err) {
-    const errRow = document.createElement('div');
-    errRow.className = 'message-row error';
-    
-    const avatarCol = document.createElement('div');
-    avatarCol.className = 'message-avatar-col';
-    const avatar = document.createElement('div');
-    avatar.className = 'avatar system';
-    avatar.innerHTML = '<span class="material-symbols-outlined" style="font-size: 1rem;">error</span>';
-    avatarCol.appendChild(avatar);
-    errRow.appendChild(avatarCol);
-
-    const contentCol = document.createElement('div');
-    contentCol.className = 'message-content-col';
-    const senderName = document.createElement('div');
-    senderName.className = 'message-sender-name';
-    senderName.textContent = 'Error';
-    contentCol.appendChild(senderName);
-
-    const bubble = document.createElement('div');
-    bubble.className = 'message-bubble';
-    bubble.textContent = '[Command failed] ' + err.message;
-    contentCol.appendChild(bubble);
-    errRow.appendChild(contentCol);
-
-    chatContainer.appendChild(errRow);
-    chatContainer.scrollTop = chatContainer.scrollHeight;
-  } finally {
+    showErrorInChat('[Setup failed] ' + err.message);
     isThinking = false;
-    document.getElementById('send-btn').disabled = false;
-    document.getElementById('prompt-input').disabled = false;
-    document.getElementById('prompt-input').focus();
+    fetchActiveTrajectory();
   }
 }
