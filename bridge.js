@@ -1522,6 +1522,96 @@ app.get('/', (req, res) => {
       cursor: not-allowed;
     }
 
+    .image-preview-container {
+      max-width: 800px;
+      margin: 0 auto 0.75rem auto;
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .image-preview-card {
+      position: relative;
+      width: 80px;
+      height: 80px;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background-size: cover;
+      background-position: center;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+
+    .image-preview-card .remove-btn {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      background: #ef4444;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 18px;
+      height: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 11px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      transition: background-color 0.2s;
+      line-height: 1;
+    }
+
+    .image-preview-card .remove-btn:hover {
+      background: #dc2626;
+    }
+
+    .attach-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 0 4px 0 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.2s, transform 0.1s;
+      flex-shrink: 0;
+    }
+
+    .attach-btn:hover:not(:disabled) {
+      color: var(--color-indigo-light);
+      transform: scale(1.05);
+    }
+
+    .attach-btn:active:not(:disabled) {
+      transform: scale(0.95);
+    }
+
+    .attach-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .message-images-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .message-image {
+      max-width: 250px;
+      max-height: 250px;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .message-image:hover {
+      opacity: 0.9;
+    }
+
     /* Sidebar overlay for Mobile */
     .sidebar-overlay {
       position: absolute;
@@ -1950,7 +2040,12 @@ app.get('/', (req, res) => {
 
     <!-- Footer Input Bar -->
     <div class="footer">
+      <div class="image-preview-container" id="image-preview-container" style="display: none;"></div>
       <div class="input-wrapper">
+        <button class="attach-btn" id="attach-btn" onclick="triggerAttachImage()" disabled title="Attach Image">
+          <span class="material-symbols-outlined" style="font-size: 1.25rem;">image</span>
+        </button>
+        <input type="file" id="image-attachment-input" accept="image/*" style="display: none;" onchange="handleImageFileSelected(event)">
         <input type="text" class="chat-input" id="prompt-input" placeholder="Select a conversation to type..." onkeydown="if(event.key === 'Enter') sendPrompt()" disabled>
         <button class="send-btn" id="send-btn" onclick="sendPrompt()" disabled>
           <span class="material-symbols-outlined" style="font-size: 1.15rem;">send</span>

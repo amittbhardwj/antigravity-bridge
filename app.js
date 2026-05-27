@@ -27,6 +27,8 @@ let optimisticMessage = null;
 let activeCascadeConfigs = {};
 let lastConnectionCheckTime = 0;
 let lastModelLoadTime = 0;
+let attachedImage = null;
+let optimisticImageAttachment = null;
 
 function updateInputStates(steps) {
   let isAgentRunning = false;
@@ -45,6 +47,7 @@ function updateInputStates(steps) {
   const isDisabled = isThinking || isAgentRunning;
   const inputEl = document.getElementById('prompt-input');
   const btnEl = document.getElementById('send-btn');
+  const attachBtn = document.getElementById('attach-btn');
   if (inputEl) {
     inputEl.disabled = isDisabled;
     if (isDisabled) {
@@ -58,6 +61,9 @@ function updateInputStates(steps) {
   }
   if (btnEl) {
     btnEl.disabled = isDisabled;
+  }
+  if (attachBtn) {
+    attachBtn.disabled = isDisabled;
   }
 }
 
@@ -214,6 +220,102 @@ function onModelChanged() {
     console.log(`[Model] Manually switched active conversation ${activeCascadeId} to ${selectEl.value}`);
   }
   updateQuotaDisplay();
+}
+
+// ===== Image Attachment System =====
+function triggerAttachImage() {
+  const fileInput = document.getElementById('image-attachment-input');
+  if (fileInput) fileInput.click();
+}
+
+function handleImageFileSelected(event) {
+  const file = event.target.files[0];
+  if (file) {
+    processImageFile(file);
+  }
+  event.target.value = '';
+}
+
+function processImageFile(file) {
+  if (!file.type.startsWith('image/')) {
+    alert('Please select an image file.');
+    return;
+  }
+  
+  if (file.size > 5 * 1024 * 1024) {
+    alert('Image size exceeds the 5MB limit.');
+    return;
+  }
+  
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const dataUrl = e.target.result;
+    const base64Marker = ';base64,';
+    const markerIndex = dataUrl.indexOf(base64Marker);
+    if (markerIndex !== -1) {
+      const base64Data = dataUrl.substring(markerIndex + base64Marker.length);
+      attachedImage = {
+        base64Data: base64Data,
+        mimeType: file.type
+      };
+      showImagePreview(dataUrl);
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+function showImagePreview(dataUrl) {
+  const container = document.getElementById('image-preview-container');
+  if (!container) return;
+  
+  container.innerHTML = '';
+  
+  const card = document.createElement('div');
+  card.className = 'image-preview-card';
+  card.style.backgroundImage = `url(${dataUrl})`;
+  
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 'remove-btn';
+  removeBtn.innerHTML = '×';
+  removeBtn.title = 'Remove image';
+  removeBtn.onclick = removeAttachedImage;
+  
+  card.appendChild(removeBtn);
+  container.appendChild(card);
+  container.style.display = 'flex';
+}
+
+function removeAttachedImage() {
+  attachedImage = null;
+  const container = document.getElementById('image-preview-container');
+  if (container) {
+    container.innerHTML = '';
+    container.style.display = 'none';
+  }
+}
+
+function handlePromptPaste(event) {
+  const items = (event.clipboardData || event.originalEvent.clipboardData).items;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      const file = item.getAsFile();
+      processImageFile(file);
+      event.preventDefault();
+      break;
+    }
+  }
+}
+
+function handleDragOver(event) {
+  event.preventDefault();
+}
+
+function handleDrop(event) {
+  event.preventDefault();
+  const files = event.dataTransfer.files;
+  if (files.length > 0) {
+    processImageFile(files[0]);
+  }
 }
 
 function toggleSidebar(open) {
@@ -496,6 +598,13 @@ window.addEventListener('DOMContentLoaded', async () => {
   await checkConnectionStatus();
   await loadModels();
   await loadConversations();
+  
+  const promptInput = document.getElementById('prompt-input');
+  if (promptInput) {
+    promptInput.addEventListener('paste', handlePromptPaste);
+    promptInput.addEventListener('dragover', handleDragOver);
+    promptInput.addEventListener('drop', handleDrop);
+  }
 });
 
 function selectConversation(id, summary) {
@@ -526,6 +635,9 @@ function selectConversation(id, summary) {
   document.getElementById('prompt-input').disabled = false;
   document.getElementById('prompt-input').placeholder = "Send message to agent...";
   document.getElementById('send-btn').disabled = false;
+  const attachBtn = document.getElementById('attach-btn');
+  if (attachBtn) attachBtn.disabled = false;
+  removeAttachedImage();
 
   // Start dynamic real-time polling
   if (pollInterval) clearInterval(pollInterval);
@@ -647,9 +759,10 @@ function renderTrajectorySteps(steps, data) {
     // 1. User Inputs
     if (type === 'CORTEX_STEP_TYPE_USER_INPUT' && step.userInput) {
       const items = step.userInput.items || [];
+      const images = step.userInput.images || [];
       items.forEach(item => {
-        if (item.text) {
-          appendMessageRow(fragment, 'user', 'You', item.text);
+        if (item.text || images.length > 0) {
+          appendMessageRow(fragment, 'user', 'You', item.text, null, images);
         }
       });
     }
@@ -798,18 +911,22 @@ function renderTrajectorySteps(steps, data) {
 
   // Check if server has registered our optimistic message
   if (optimisticMessage) {
-    const hasOptimistic = steps.some(step => 
-      step.type === 'CORTEX_STEP_TYPE_USER_INPUT' && 
-      step.userInput?.items?.some(item => item.text === optimisticMessage)
-    );
+    const hasOptimistic = steps.some(step => {
+      if (step.type !== 'CORTEX_STEP_TYPE_USER_INPUT' || !step.userInput) return false;
+      const targetText = optimisticMessage === '[Attached Image]' ? '' : optimisticMessage;
+      const hasText = step.userInput.items?.some(item => (item.text || '') === targetText);
+      const hasImg = optimisticImageAttachment ? (step.userInput.images && step.userInput.images.length > 0) : true;
+      return hasText && hasImg;
+    });
     if (hasOptimistic) {
       optimisticMessage = null; // Server has it, clear optimistic state
+      optimisticImageAttachment = null;
     }
   }
 
   // If the server hasn't returned the optimistic message yet, append it at the end
   if (optimisticMessage) {
-    appendMessageRow(fragment, 'user', 'You', optimisticMessage);
+    appendMessageRow(fragment, 'user', 'You', optimisticMessage === '[Attached Image]' ? '' : optimisticMessage, null, optimisticImageAttachment ? [optimisticImageAttachment] : null);
   }
 
   // Render items
@@ -826,7 +943,7 @@ function renderTrajectorySteps(steps, data) {
 }
 
 // Helper to append standard message rows
-function appendMessageRow(fragment, type, sender, content, thinking) {
+function appendMessageRow(fragment, type, sender, content, thinking, images) {
   const row = document.createElement('div');
   row.className = 'message-row ' + type;
   
@@ -876,16 +993,46 @@ function appendMessageRow(fragment, type, sender, content, thinking) {
     contentCol.appendChild(thinkingDetails);
   }
 
-  // Render body text
-  if (content) {
+  // Render body text and images
+  if (content || (images && images.length > 0)) {
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
-    if (type === 'agent') {
-      bubble.innerHTML = safeParseMd(content);
-      safeHighlight(bubble);
-    } else {
-      bubble.textContent = content;
+    if (content) {
+      if (type === 'agent') {
+        bubble.innerHTML = safeParseMd(content);
+        safeHighlight(bubble);
+      } else {
+        bubble.textContent = content;
+      }
     }
+    
+    if (images && images.length > 0) {
+      const imagesContainer = document.createElement('div');
+      imagesContainer.className = 'message-images-container';
+      images.forEach(img => {
+        let src = '';
+        if (img.base64Data) {
+          const mime = img.mimeType || 'image/png';
+          src = img.base64Data.startsWith('data:') ? img.base64Data : `data:${mime};base64,${img.base64Data}`;
+        } else if (img.uri) {
+          src = img.uri;
+        }
+        
+        if (src) {
+          const imgEl = document.createElement('img');
+          imgEl.src = src;
+          imgEl.alt = img.caption || 'Attached Image';
+          imgEl.className = 'message-image';
+          imgEl.onclick = () => {
+            const win = window.open();
+            win.document.write(`<img src="${src}" style="max-width:100%; max-height:100vh; display:block; margin:auto;" />`);
+          };
+          imagesContainer.appendChild(imgEl);
+        }
+      });
+      bubble.appendChild(imagesContainer);
+    }
+    
     contentCol.appendChild(bubble);
   }
 
@@ -950,11 +1097,20 @@ function appendToolAccordion(fragment, name, subtitle, status, detail, iconName)
 async function sendPrompt() {
   const input = document.getElementById('prompt-input');
   const prompt = input.value.trim();
-  if (!prompt || !activeCascadeId || isThinking) return;
+  if ((!prompt && !attachedImage) || !activeCascadeId || isThinking) return;
 
   input.value = '';
   isThinking = true;
-  optimisticMessage = prompt;
+  
+  const imageToSend = attachedImage;
+  if (imageToSend) {
+    optimisticImageAttachment = imageToSend;
+    removeAttachedImage();
+  } else {
+    optimisticImageAttachment = null;
+  }
+  
+  optimisticMessage = prompt || (imageToSend ? '[Attached Image]' : '');
 
   // Immediately lock UI inputs
   updateInputStates([]);
@@ -965,7 +1121,7 @@ async function sendPrompt() {
 
   // Optimistically append the user prompt immediately
   const fragment = document.createDocumentFragment();
-  appendMessageRow(fragment, 'user', 'You', prompt);
+  appendMessageRow(fragment, 'user', 'You', prompt, null, imageToSend ? [imageToSend] : null);
   chatContainer.appendChild(fragment);
   chatContainer.scrollTop = chatContainer.scrollHeight;
 
@@ -974,10 +1130,19 @@ async function sendPrompt() {
       cascadeId: activeCascadeId,
       items: [
         {
-          text: prompt
+          text: prompt || ""
         }
       ]
     };
+
+    if (imageToSend) {
+      payload.images = [
+        {
+          base64Data: imageToSend.base64Data,
+          mimeType: imageToSend.mimeType
+        }
+      ];
+    }
 
     const selectEl = document.getElementById('model-select');
     if (selectEl && selectEl.value) {
