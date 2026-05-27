@@ -23,6 +23,18 @@ let availableModels = {};
 let selectedModels = {}; // per-conversation model choice
 let defaultModelId = '';
 
+let currentPollIntervalMs = 1500;
+
+function updatePollingInterval(newIntervalMs) {
+  if (currentPollIntervalMs === newIntervalMs) return;
+  currentPollIntervalMs = newIntervalMs;
+  if (pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = setInterval(fetchActiveTrajectory, newIntervalMs);
+    console.log(`[Poll] Adjusted interval to ${newIntervalMs}ms`);
+  }
+}
+
 async function loadModels() {
   const selectEl = document.getElementById('model-select');
   if (!selectEl) return;
@@ -294,9 +306,10 @@ function selectConversation(id, summary) {
   if (pollInterval) clearInterval(pollInterval);
   lastStepsJson = '';
   lastStepsLength = 0;
+  currentPollIntervalMs = 1500;
 
   fetchActiveTrajectory();
-  pollInterval = setInterval(fetchActiveTrajectory, 1500);
+  pollInterval = setInterval(fetchActiveTrajectory, currentPollIntervalMs);
 
   toggleSidebar(false); // Close sidebar on mobile drawer
 }
@@ -313,6 +326,23 @@ async function fetchActiveTrajectory() {
     const data = await response.json();
     const steps = data?.trajectory?.steps || [];
     
+    // Check if any step is currently running or if the agent is still working
+    let isAgentRunning = false;
+    if (steps.length > 0) {
+      const lastStep = steps[steps.length - 1];
+      const status = lastStep.status || '';
+      if (status === 'CORTEX_STEP_STATUS_RUNNING' || status === 'running') {
+        isAgentRunning = true;
+      }
+    }
+
+    // Adapt polling rate: fast when thinking/running, slow when idle to save battery & network bandwidth
+    if (isThinking || isAgentRunning) {
+      updatePollingInterval(400); // 400ms fast-poll
+    } else {
+      updatePollingInterval(2500); // 2.5s slow-poll
+    }
+
     // Extract currently active model from trajectory config
     const metadatas = data?.trajectory?.executorMetadatas || [];
     let activeModelName = '';
@@ -644,6 +674,9 @@ async function sendPrompt() {
     if (selectEl && selectEl.value) {
       payload.selectedModel = selectEl.value;
     }
+
+    // Force fast polling immediately when a message is sent
+    updatePollingInterval(400);
 
     const response = await fetch('/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage', {
       method: 'POST',
