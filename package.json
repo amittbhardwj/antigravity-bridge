@@ -1,0 +1,14 @@
+{
+  "name": "antigravity-bridge",
+  "version": "1.0.0",
+  "description": "Tailscale-aware bridge server to remote control Antigravity",
+  "main": "bridge.js",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "start": "node bridge.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

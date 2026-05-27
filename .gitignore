@@ -1,0 +1,14 @@
+# Node.js dependencies
+node_modules/
+package-lock.json
+
+# Local configurations / scraped credentials
+config_extracted.json
+
+# Logs
+*.log
+logs/
+
+# OS metadata
+.DS_Store
+Thumbs.db
