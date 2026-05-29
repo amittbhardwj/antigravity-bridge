@@ -115,7 +115,15 @@ function getAntigravityCredentials() {
  */
 function getTailscaleIp() {
   try {
-    const ip = execSync('tailscale ip -4', { encoding: 'utf8' }).trim();
+    const paths = ['/usr/local/bin/tailscale', '/opt/homebrew/bin/tailscale', '/Applications/Tailscale.app/Contents/Resources/bin/tailscale', 'tailscale'];
+    let tailscaleCmd = 'tailscale';
+    for (const p of paths) {
+      if (p === 'tailscale' || fs.existsSync(p)) {
+        tailscaleCmd = p;
+        break;
+      }
+    }
+    const ip = execSync(`${tailscaleCmd} ip -4`, { encoding: 'utf8' }).trim();
     if (ip && !ip.includes('Error')) return ip;
   } catch (err) {
     console.warn('Tailscale is not active or tailscale CLI is not in PATH.');
